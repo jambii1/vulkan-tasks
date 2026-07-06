@@ -1,4 +1,6 @@
 #include "triangle_app.hpp"
+
+#include <fstream>
 #include <iostream>
 
 void vulkan_app::TriangleApp::run() {
@@ -115,11 +117,11 @@ void vulkan_app::TriangleApp::checkFeatureSupport() {
   appInfo.profile = {VP_KHR_ROADMAP_2022_NAME,
                      VP_KHR_ROADMAP_2022_SPEC_VERSION};
 
-  VkBool32 supported = VK_FALSE;
+  VkBool32 supported = vk::False;
   VkResult result = vpGetPhysicalDeviceProfileSupport(
       *instance, *physicalDevice, &appInfo.profile, &supported);
 
-  if (!(result == VK_SUCCESS) || !(supported == VK_TRUE)) {
+  if (!(result == VK_SUCCESS) || !(supported == vk::True)) {
     appInfo.profileSupported = false;
   }
 
@@ -202,7 +204,7 @@ void vulkan_app::TriangleApp::createSwapChain() {
       .preTransform = surfaceCapabilities.currentTransform,
       .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
       .presentMode = presentMode,
-      .clipped = true};
+      .clipped = VK_TRUE};
 
   swapChain = vk::raii::SwapchainKHR(device, swapChainCreateInfo);
   swapChainImages = swapChain.getImages();
@@ -217,6 +219,93 @@ void vulkan_app::TriangleApp::createImageViews() {
     imageViewCreateInfo.image = image;
     swapChainImageViews.emplace_back(device, imageViewCreateInfo);
   }
+}
+
+void vulkan_app::TriangleApp::createGraphicsPipeline() {
+  vk::raii::ShaderModule shaderModule =
+      createShaderModule(readFile("shaders/triangle.spv"));
+
+  vk::PipelineShaderStageCreateInfo vertShaderStageInfo{
+      .stage = vk::ShaderStageFlagBits::eVertex,
+      .module = shaderModule,
+      .pName = "vertMain"};
+  vk::PipelineShaderStageCreateInfo fragShaderStageInfo{
+      .stage = vk::ShaderStageFlagBits::eFragment,
+      .module = shaderModule,
+      .pName = "fragMain"};
+  vk::PipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo,
+                                                      fragShaderStageInfo};
+
+  auto bindingDescription = Vertex::getBindingDescription();
+  auto attributeDescriptions = Vertex::getAttributeDescriptions();
+  vk::PipelineVertexInputStateCreateInfo vertexInputInfo{
+      .vertexBindingDescriptionCount = 1,
+      .pVertexBindingDescriptions = &bindingDescription,
+      .vertexAttributeDescriptionCount =
+          static_cast<uint32_t>(attributeDescriptions.size()),
+      .pVertexAttributeDescriptions = attributeDescriptions.data()};
+
+  vk::PipelineInputAssemblyStateCreateInfo inputAssembly{
+      .topology = vk::PrimitiveTopology::eTriangleList};
+
+  vk::PipelineViewportStateCreateInfo viewportState{.viewportCount = 1,
+                                                    .scissorCount = 1};
+
+  vk::PipelineRasterizationStateCreateInfo rasterizer{
+      .depthClampEnable = vk::False,
+      .rasterizerDiscardEnable = vk::False,
+      .polygonMode = vk::PolygonMode::eFill,
+      .cullMode = vk::CullModeFlagBits::eBack,
+      .frontFace = vk::FrontFace::eClockwise,
+      .depthBiasEnable = vk::False,
+      .lineWidth = 1.0f};
+
+  vk::PipelineMultisampleStateCreateInfo multisampling{
+      .rasterizationSamples = vk::SampleCountFlagBits::e1,
+      .sampleShadingEnable = vk::False};
+
+  vk::PipelineColorBlendAttachmentState colorBlendAttachment{
+      .blendEnable = vk::False,
+      .colorWriteMask =
+          vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+          vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
+
+  vk::PipelineColorBlendStateCreateInfo colorBlending{
+      .logicOpEnable = vk::False,
+      .logicOp = vk::LogicOp::eCopy,
+      .attachmentCount = 1,
+      .pAttachments = &colorBlendAttachment};
+
+  std::vector<vk::DynamicState> dynamicStates = {vk::DynamicState::eViewport,
+                                                 vk::DynamicState::eScissor};
+  vk::PipelineDynamicStateCreateInfo dynamicState{
+      .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+      .pDynamicStates = dynamicStates.data()};
+
+  vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 0,
+                                                  .pushConstantRangeCount = 0};
+  pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+
+  vk::StructureChain<vk::GraphicsPipelineCreateInfo,
+                     vk::PipelineRenderingCreateInfo>
+      pipelineCreateInfoChain = {
+          {.stageCount = 2,
+           .pStages = shaderStages,
+           .pVertexInputState = &vertexInputInfo,
+           .pInputAssemblyState = &inputAssembly,
+           .pViewportState = &viewportState,
+           .pRasterizationState = &rasterizer,
+           .pMultisampleState = &multisampling,
+           .pColorBlendState = &colorBlending,
+           .pDynamicState = &dynamicState,
+           .layout = pipelineLayout,
+           .renderPass = nullptr},
+          {.colorAttachmentCount = 1,
+           .pColorAttachmentFormats = &swapChainSurfaceFormat.format}};
+
+  graphicsPipeline = vk::raii::Pipeline(
+      device, nullptr,
+      pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
 }
 
 std::vector<const char *>
@@ -329,4 +418,29 @@ vk::PresentModeKHR vulkan_app::TriangleApp::chooseSwapPresentMode(
                              })
              ? vk::PresentModeKHR::eMailbox
              : vk::PresentModeKHR::eFifo;
+}
+
+vk::raii::ShaderModule
+vulkan_app::TriangleApp::createShaderModule(const std::vector<char> &code) {
+  vk::ShaderModuleCreateInfo createInfo{
+      .codeSize = code.size(),
+      .pCode = reinterpret_cast<const uint32_t *>(code.data())};
+  vk::raii::ShaderModule shaderModule{device, createInfo};
+
+  return shaderModule;
+}
+
+std::vector<char>
+vulkan_app::TriangleApp::readFile(const std::string &filename) {
+  std::ifstream file(filename, std::ios::ate | std::ios::binary);
+  if (!file.is_open()) {
+    throw std::runtime_error("failed to open file");
+  }
+
+  std::vector<char> buffer(file.tellg());
+  file.seekg(0, std::ios::beg);
+  file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+  file.close();
+
+  return buffer;
 }

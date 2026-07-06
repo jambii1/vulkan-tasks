@@ -8,11 +8,35 @@
 #include <vulkan/vulkan_raii.hpp>
 
 #include <GLFW/glfw3.h>
+#include <glm/glm.hpp>
 
 namespace vulkan_app {
 struct AppInfo {
   bool profileSupported = false;
   VpProfileProperties profile;
+};
+
+struct Vertex {
+  glm::vec2 pos;
+  glm::vec3 color;
+
+  static vk::VertexInputBindingDescription getBindingDescription() {
+    return {.binding = 0,
+            .stride = sizeof(Vertex),
+            .inputRate = vk::VertexInputRate::eVertex};
+  }
+
+  static std::array<vk::VertexInputAttributeDescription, 2>
+  getAttributeDescriptions() {
+    return {{{.location = 0,
+              .binding = 0,
+              .format = vk::Format::eR32G32Sfloat,
+              .offset = offsetof(Vertex, pos)},
+             {.location = 1,
+              .binding = 0,
+              .format = vk::Format::eR32G32B32Sfloat,
+              .offset = offsetof(Vertex, color)}}};
+  }
 };
 
 class TriangleApp {
@@ -38,6 +62,9 @@ private:
   vk::SurfaceFormatKHR swapChainSurfaceFormat;
   vk::Extent2D swapChainExtent;
   std::vector<vk::raii::ImageView> swapChainImageViews;
+
+  vk::raii::PipelineLayout pipelineLayout = nullptr;
+  vk::raii::Pipeline graphicsPipeline = nullptr;
 
   AppInfo appInfo = {};
 
@@ -84,6 +111,10 @@ private:
       const std::vector<vk::SurfaceFormatKHR> &availableFormats);
   static vk::PresentModeKHR chooseSwapPresentMode(
       std::vector<vk::PresentModeKHR> const &availablePresentModes);
+
+  vk::raii::ShaderModule createShaderModule(const std::vector<char> &code);
+
+  static std::vector<char> readFile(const std::string &filename);
 };
 } // namespace vulkan_app
 
