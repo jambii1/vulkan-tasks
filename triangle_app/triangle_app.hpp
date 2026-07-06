@@ -33,6 +33,12 @@ private:
   uint32_t queueIndex = ~0;
   vk::raii::Queue queue = nullptr;
 
+  vk::raii::SwapchainKHR swapChain = nullptr;
+  std::vector<vk::Image> swapChainImages;
+  vk::SurfaceFormatKHR swapChainSurfaceFormat;
+  vk::Extent2D swapChainExtent;
+  std::vector<vk::raii::ImageView> swapChainImageViews;
+
   AppInfo appInfo = {};
 
   const std::vector<const char *> requiredDeviceExtension = {
@@ -50,12 +56,34 @@ private:
   void checkFeatureSupport();
   void createLogicalDevice();
 
+  void createSwapChain();
+  void createImageViews();
+
+  void createGraphicsPipeline();
+
+  void createCommandPool();
+  void createCommandBuffers();
+
+  void createVertexBuffer();
+  void createIndexBuffer();
+
+  void createSyncObjects();
+
   std::vector<const char *> getRequiredInstanceExtensions();
   static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(
       vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
       vk::DebugUtilsMessageTypeFlagsEXT type,
       const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void *);
-  bool isDeviceSuitable(const vk::raii::PhysicalDevice &physicalDevice);
+  bool isDeviceSuitable(const vk::raii::PhysicalDevice &physicalDevice) const;
+
+  vk::Extent2D
+  chooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities) const;
+  static uint32_t chooseSwapMinImageCount(
+      const vk::SurfaceCapabilitiesKHR &surfaceCapabilities);
+  static vk::SurfaceFormatKHR chooseSwapSurfaceFormat(
+      const std::vector<vk::SurfaceFormatKHR> &availableFormats);
+  static vk::PresentModeKHR chooseSwapPresentMode(
+      std::vector<vk::PresentModeKHR> const &availablePresentModes);
 };
 } // namespace vulkan_app
 

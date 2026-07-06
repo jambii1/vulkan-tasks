@@ -176,6 +176,49 @@ void vulkan_app::TriangleApp::createLogicalDevice() {
   queue = device.getQueue(queueIndex, 0);
 }
 
+void vulkan_app::TriangleApp::createSwapChain() {
+  vk::SurfaceCapabilitiesKHR surfaceCapabilities =
+      physicalDevice.getSurfaceCapabilitiesKHR(*surface);
+  swapChainExtent = chooseSwapExtent(surfaceCapabilities);
+  uint32_t minImageCount = chooseSwapMinImageCount(surfaceCapabilities);
+
+  std::vector<vk::SurfaceFormatKHR> availableFormats =
+      physicalDevice.getSurfaceFormatsKHR(*surface);
+  swapChainSurfaceFormat = chooseSwapSurfaceFormat(availableFormats);
+
+  std::vector<vk::PresentModeKHR> availablePresentModes =
+      physicalDevice.getSurfacePresentModesKHR(*surface);
+  vk::PresentModeKHR presentMode = chooseSwapPresentMode(availablePresentModes);
+
+  vk::SwapchainCreateInfoKHR swapChainCreateInfo{
+      .surface = *surface,
+      .minImageCount = minImageCount,
+      .imageFormat = swapChainSurfaceFormat.format,
+      .imageColorSpace = swapChainSurfaceFormat.colorSpace,
+      .imageExtent = swapChainExtent,
+      .imageArrayLayers = 1,
+      .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
+      .imageSharingMode = vk::SharingMode::eExclusive,
+      .preTransform = surfaceCapabilities.currentTransform,
+      .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
+      .presentMode = presentMode,
+      .clipped = true};
+
+  swapChain = vk::raii::SwapchainKHR(device, swapChainCreateInfo);
+  swapChainImages = swapChain.getImages();
+}
+
+void vulkan_app::TriangleApp::createImageViews() {
+  vk::ImageViewCreateInfo imageViewCreateInfo{
+      .viewType = vk::ImageViewType::e2D,
+      .format = swapChainSurfaceFormat.format,
+      .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
+  for (auto &image : swapChainImages) {
+    imageViewCreateInfo.image = image;
+    swapChainImageViews.emplace_back(device, imageViewCreateInfo);
+  }
+}
+
 std::vector<const char *>
 vulkan_app::TriangleApp::getRequiredInstanceExtensions() {
   uint32_t glfwExtensionCount = 0;
@@ -186,7 +229,8 @@ vulkan_app::TriangleApp::getRequiredInstanceExtensions() {
       context.enumerateInstanceExtensionProperties();
   bool debugUtilsAvailable =
       std::ranges::any_of(props, [](const vk::ExtensionProperties &ep) {
-        return strcmp(ep.extensionName, vk::EXTDebugUtilsExtensionName) == 0;
+        return std::strcmp(ep.extensionName, vk::EXTDebugUtilsExtensionName) ==
+               0;
       });
 
   if (debugUtilsAvailable) {
@@ -214,7 +258,7 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkan_app::TriangleApp::debugCallback(
 }
 
 bool vulkan_app::TriangleApp::isDeviceSuitable(
-    const vk::raii::PhysicalDevice &physicalDevice) {
+    const vk::raii::PhysicalDevice &physicalDevice) const {
   bool supportsVulkan1_3 =
       physicalDevice.getProperties().apiVersion >= VK_API_VERSION_1_3;
 
@@ -232,10 +276,57 @@ bool vulkan_app::TriangleApp::isDeviceSuitable(
         return std::ranges::any_of(
             availableDeviceExtensions,
             [requiredDeviceExtension](const auto &availableDeviceExtension) {
-              return strcmp(availableDeviceExtension.extensionName,
-                            requiredDeviceExtension) == 0;
+              return std::strcmp(availableDeviceExtension.extensionName,
+                                 requiredDeviceExtension) == 0;
             });
       });
 
   return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions;
+}
+
+vk::Extent2D vulkan_app::TriangleApp::chooseSwapExtent(
+    const vk::SurfaceCapabilitiesKHR &capabilities) const {
+  if (capabilities.currentExtent.width !=
+      std::numeric_limits<uint32_t>::max()) {
+    return capabilities.currentExtent;
+  }
+  int width = 0, height = 0;
+  glfwGetFramebufferSize(window, &width, &height);
+
+  return {std::clamp<uint32_t>(width, capabilities.minImageExtent.width,
+                               capabilities.maxImageExtent.width),
+          std::clamp<uint32_t>(height, capabilities.minImageExtent.height,
+                               capabilities.maxImageExtent.height)};
+}
+
+uint32_t vulkan_app::TriangleApp::chooseSwapMinImageCount(
+    const vk::SurfaceCapabilitiesKHR &surfaceCapabilities) {
+  auto minImageCount = std::max(3u, surfaceCapabilities.minImageCount);
+  if ((0 < surfaceCapabilities.maxImageCount) &&
+      (surfaceCapabilities.maxImageCount < minImageCount)) {
+    minImageCount = surfaceCapabilities.maxImageCount;
+  }
+
+  return minImageCount;
+}
+
+vk::SurfaceFormatKHR vulkan_app::TriangleApp::chooseSwapSurfaceFormat(
+    const std::vector<vk::SurfaceFormatKHR> &availableFormats) {
+  const auto formatIt =
+      std::ranges::find_if(availableFormats, [](const auto &format) {
+        return format.format == vk::Format::eB8G8R8A8Srgb &&
+               format.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear;
+      });
+
+  return formatIt != availableFormats.end() ? *formatIt : availableFormats[0];
+}
+
+vk::PresentModeKHR vulkan_app::TriangleApp::chooseSwapPresentMode(
+    std::vector<vk::PresentModeKHR> const &availablePresentModes) {
+  return std::ranges::any_of(availablePresentModes,
+                             [](const vk::PresentModeKHR value) {
+                               return vk::PresentModeKHR::eMailbox == value;
+                             })
+             ? vk::PresentModeKHR::eMailbox
+             : vk::PresentModeKHR::eFifo;
 }
