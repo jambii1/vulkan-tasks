@@ -32,10 +32,12 @@ void vulkan_app::TriangleApp::initWindow() {
   glfwInit();
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
-  window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Triangle", nullptr,
-                            nullptr);
+  window_ = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Triangle", nullptr,
+                             nullptr);
+  glfwSetWindowUserPointer(window_, this);
+  glfwSetFramebufferSizeCallback(window_, framebufferResizeCallback);
 }
 
 void vulkan_app::TriangleApp::initVulkan() {
@@ -45,17 +47,33 @@ void vulkan_app::TriangleApp::initVulkan() {
   pickPhysicalDevice();
   checkFeatureSupport();
   createLogicalDevice();
+
+  createSwapChain();
+  createImageViews();
+
+  createGraphicsPipeline();
+
+  createCommandPool();
+
+  createVertexBuffer();
+  createIndexBuffer();
+
+  createCommandBuffers();
+
+  createSyncObjects();
 }
 
-void vulkan_app::TriangleApp::mainLoop() const {
-  while (!glfwWindowShouldClose(window)) {
+void vulkan_app::TriangleApp::mainLoop() {
+  while (!glfwWindowShouldClose(window_)) {
     glfwPollEvents();
+    drawFrame();
   }
+
+  device_.waitIdle();
 }
 
 void vulkan_app::TriangleApp::cleanup() {
-  glfwDestroyWindow(window);
-
+  glfwDestroyWindow(window_);
   glfwTerminate();
 }
 
@@ -74,7 +92,7 @@ void vulkan_app::TriangleApp::createInstance() {
       .enabledExtensionCount = static_cast<uint32_t>(requiredExtensions.size()),
       .ppEnabledExtensionNames = requiredExtensions.data()};
 
-  instance = vk::raii::Instance(context, createInfo);
+  instance_ = vk::raii::Instance(context_, createInfo);
 }
 
 void vulkan_app::TriangleApp::setupDebugMessenger() {
@@ -94,8 +112,8 @@ void vulkan_app::TriangleApp::setupDebugMessenger() {
       .pfnUserCallback = &debugCallback};
 
   try {
-    debugMessenger =
-        instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
+    debugMessenger_ = instance_.createDebugUtilsMessengerEXT(
+        debugUtilsMessengerCreateInfoEXT);
   } catch (vk::SystemError &err) {
     std::cout << "Debug messenger not available. Validation layers may not be "
                  "enabled."
@@ -104,16 +122,16 @@ void vulkan_app::TriangleApp::setupDebugMessenger() {
 }
 
 void vulkan_app::TriangleApp::createSurface() {
-  VkSurfaceKHR _surface;
-  if (glfwCreateWindowSurface(*instance, window, nullptr, &_surface) != 0) {
+  VkSurfaceKHR surface;
+  if (glfwCreateWindowSurface(*instance_, window_, nullptr, &surface) != 0) {
     throw std::runtime_error("failed to create window surface!");
   }
-  surface = vk::raii::SurfaceKHR(instance, _surface);
+  surface_ = vk::raii::SurfaceKHR(instance_, surface);
 }
 
 void vulkan_app::TriangleApp::pickPhysicalDevice() {
   std::vector<vk::raii::PhysicalDevice> physicalDevices =
-      instance.enumeratePhysicalDevices();
+      instance_.enumeratePhysicalDevices();
   const auto devIter =
       std::ranges::find_if(physicalDevices, [&](const auto &physicalDevice) {
         return isDeviceSuitable(physicalDevice);
@@ -121,10 +139,10 @@ void vulkan_app::TriangleApp::pickPhysicalDevice() {
   if (devIter == physicalDevices.end()) {
     throw std::runtime_error("failed to find a suitable GPU!");
   }
-  physicalDevice = *devIter;
+  physicalDevice_ = *devIter;
 
   vk::PhysicalDeviceProperties deviceProperties =
-      physicalDevice.getProperties();
+      physicalDevice_.getProperties();
   std::cout << "Selected GPU: " << deviceProperties.deviceName << std::endl;
   std::cout << "API Version: " << VK_VERSION_MAJOR(deviceProperties.apiVersion)
             << "." << VK_VERSION_MINOR(deviceProperties.apiVersion) << "."
@@ -132,46 +150,46 @@ void vulkan_app::TriangleApp::pickPhysicalDevice() {
 }
 
 void vulkan_app::TriangleApp::checkFeatureSupport() {
-  appInfo.profile = {VP_KHR_ROADMAP_2022_NAME,
-                     VP_KHR_ROADMAP_2022_SPEC_VERSION};
+  appInfo_.profile = {VP_KHR_ROADMAP_2022_NAME,
+                      VP_KHR_ROADMAP_2022_SPEC_VERSION};
 
   VkBool32 supported = vk::False;
   VkResult result = vpGetPhysicalDeviceProfileSupport(
-      *instance, *physicalDevice, &appInfo.profile, &supported);
+      *instance_, *physicalDevice_, &appInfo_.profile, &supported);
 
   if (!(result == VK_SUCCESS) || !(supported == vk::True)) {
-    appInfo.profileSupported = false;
+    appInfo_.profileSupported = false;
   }
 
-  appInfo.profileSupported = true;
+  appInfo_.profileSupported = true;
   std::cout << "Using KHR roadmap 2022 profile" << std::endl;
 }
 
 void vulkan_app::TriangleApp::createLogicalDevice() {
   std::vector<vk::QueueFamilyProperties> queueFamilyProperties =
-      physicalDevice.getQueueFamilyProperties();
+      physicalDevice_.getQueueFamilyProperties();
 
   for (uint32_t qfpIndex = 0; qfpIndex < queueFamilyProperties.size();
        qfpIndex++) {
     if ((queueFamilyProperties[qfpIndex].queueFlags &
          vk::QueueFlagBits::eGraphics) &&
-        physicalDevice.getSurfaceSupportKHR(qfpIndex, *surface)) {
-      queueIndex = qfpIndex;
+        physicalDevice_.getSurfaceSupportKHR(qfpIndex, *surface_)) {
+      queueIndex_ = qfpIndex;
       break;
     }
   }
-  if (queueIndex == ~0) {
+  if (queueIndex_ == ~0) {
     throw std::runtime_error(
         "could not find a queue for graphics and present -> terminating");
   }
 
   float queuePriority = 0.5f;
   vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
-      .queueFamilyIndex = queueIndex,
+      .queueFamilyIndex = queueIndex_,
       .queueCount = 1,
       .pQueuePriorities = &queuePriority};
 
-  if (!appInfo.profileSupported) {
+  if (!appInfo_.profileSupported) {
     throw std::runtime_error(
         "KHR roadmap 2022 profile is not supported -> terminating");
   }
@@ -181,7 +199,7 @@ void vulkan_app::TriangleApp::createLogicalDevice() {
   features2.features = deviceFeatures;
 
   vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures;
-  dynamicRenderingFeatures.dynamicRendering = VK_TRUE;
+  dynamicRenderingFeatures.dynamicRendering = vk::True;
   features2.pNext = &dynamicRenderingFeatures;
 
   vk::DeviceCreateInfo vkDeviceCreateInfo{
@@ -189,53 +207,53 @@ void vulkan_app::TriangleApp::createLogicalDevice() {
       .queueCreateInfoCount = 1,
       .pQueueCreateInfos = &deviceQueueCreateInfo,
       .enabledExtensionCount =
-          static_cast<uint32_t>(requiredDeviceExtension.size()),
-      .ppEnabledExtensionNames = requiredDeviceExtension.data()};
+          static_cast<uint32_t>(requiredDeviceExtension_.size()),
+      .ppEnabledExtensionNames = requiredDeviceExtension_.data()};
 
-  device = vk::raii::Device(physicalDevice, vkDeviceCreateInfo);
-  queue = device.getQueue(queueIndex, 0);
+  device_ = vk::raii::Device(physicalDevice_, vkDeviceCreateInfo);
+  queue_ = device_.getQueue(queueIndex_, 0);
 }
 
 void vulkan_app::TriangleApp::createSwapChain() {
   vk::SurfaceCapabilitiesKHR surfaceCapabilities =
-      physicalDevice.getSurfaceCapabilitiesKHR(*surface);
-  swapChainExtent = chooseSwapExtent(surfaceCapabilities);
+      physicalDevice_.getSurfaceCapabilitiesKHR(*surface_);
+  swapChainExtent_ = chooseSwapExtent(surfaceCapabilities);
   uint32_t minImageCount = chooseSwapMinImageCount(surfaceCapabilities);
 
   std::vector<vk::SurfaceFormatKHR> availableFormats =
-      physicalDevice.getSurfaceFormatsKHR(*surface);
-  swapChainSurfaceFormat = chooseSwapSurfaceFormat(availableFormats);
+      physicalDevice_.getSurfaceFormatsKHR(*surface_);
+  swapChainSurfaceFormat_ = chooseSwapSurfaceFormat(availableFormats);
 
   std::vector<vk::PresentModeKHR> availablePresentModes =
-      physicalDevice.getSurfacePresentModesKHR(*surface);
+      physicalDevice_.getSurfacePresentModesKHR(*surface_);
   vk::PresentModeKHR presentMode = chooseSwapPresentMode(availablePresentModes);
 
   vk::SwapchainCreateInfoKHR swapChainCreateInfo{
-      .surface = *surface,
+      .surface = *surface_,
       .minImageCount = minImageCount,
-      .imageFormat = swapChainSurfaceFormat.format,
-      .imageColorSpace = swapChainSurfaceFormat.colorSpace,
-      .imageExtent = swapChainExtent,
+      .imageFormat = swapChainSurfaceFormat_.format,
+      .imageColorSpace = swapChainSurfaceFormat_.colorSpace,
+      .imageExtent = swapChainExtent_,
       .imageArrayLayers = 1,
       .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
       .imageSharingMode = vk::SharingMode::eExclusive,
       .preTransform = surfaceCapabilities.currentTransform,
       .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
       .presentMode = presentMode,
-      .clipped = VK_TRUE};
+      .clipped = vk::True};
 
-  swapChain = vk::raii::SwapchainKHR(device, swapChainCreateInfo);
-  swapChainImages = swapChain.getImages();
+  swapChain_ = vk::raii::SwapchainKHR(device_, swapChainCreateInfo);
+  swapChainImages_ = swapChain_.getImages();
 }
 
 void vulkan_app::TriangleApp::createImageViews() {
   vk::ImageViewCreateInfo imageViewCreateInfo{
       .viewType = vk::ImageViewType::e2D,
-      .format = swapChainSurfaceFormat.format,
+      .format = swapChainSurfaceFormat_.format,
       .subresourceRange = {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}};
-  for (auto &image : swapChainImages) {
+  for (auto &image : swapChainImages_) {
     imageViewCreateInfo.image = image;
-    swapChainImageViews.emplace_back(device, imageViewCreateInfo);
+    swapChainImageViews_.emplace_back(device_, imageViewCreateInfo);
   }
 }
 
@@ -302,7 +320,7 @@ void vulkan_app::TriangleApp::createGraphicsPipeline() {
 
   vk::PipelineLayoutCreateInfo pipelineLayoutInfo{.setLayoutCount = 0,
                                                   .pushConstantRangeCount = 0};
-  pipelineLayout = vk::raii::PipelineLayout(device, pipelineLayoutInfo);
+  pipelineLayout_ = vk::raii::PipelineLayout(device_, pipelineLayoutInfo);
 
   vk::StructureChain<vk::GraphicsPipelineCreateInfo,
                      vk::PipelineRenderingCreateInfo>
@@ -316,55 +334,34 @@ void vulkan_app::TriangleApp::createGraphicsPipeline() {
            .pMultisampleState = &multisampling,
            .pColorBlendState = &colorBlending,
            .pDynamicState = &dynamicState,
-           .layout = pipelineLayout,
+           .layout = pipelineLayout_,
            .renderPass = nullptr},
           {.colorAttachmentCount = 1,
-           .pColorAttachmentFormats = &swapChainSurfaceFormat.format}};
+           .pColorAttachmentFormats = &swapChainSurfaceFormat_.format}};
 
-  graphicsPipeline = vk::raii::Pipeline(
-      device, nullptr,
+  graphicsPipeline_ = vk::raii::Pipeline(
+      device_, nullptr,
       pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
 }
 
 void vulkan_app::TriangleApp::createCommandPool() {
   vk::CommandPoolCreateInfo poolInfo{
       .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-      .queueFamilyIndex = queueIndex};
-  commandPool = vk::raii::CommandPool(device, poolInfo);
+      .queueFamilyIndex = queueIndex_};
+  commandPool_ = vk::raii::CommandPool(device_, poolInfo);
 }
 
 void vulkan_app::TriangleApp::createCommandBuffers() {
-  commandBuffers.clear();
-  vk::CommandBufferAllocateInfo allocInfo{.commandPool = *commandPool,
-                                          .level =
-                                              vk::CommandBufferLevel::ePrimary,
-                                          .commandBufferCount = 1};
-  commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
+  commandBuffers_.clear();
+  vk::CommandBufferAllocateInfo allocInfo{
+      .commandPool = *commandPool_,
+      .level = vk::CommandBufferLevel::ePrimary,
+      .commandBufferCount = static_cast<uint32_t>(MAX_FRAMES_IN_FLIGHT)};
+  commandBuffers_ = vk::raii::CommandBuffers(device_, allocInfo);
 }
 
 void vulkan_app::TriangleApp::createVertexBuffer() {
-  vk::DeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
-
-  auto [stagingBuffer, stagingBufferMemory] =
-      createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
-                   vk::MemoryPropertyFlagBits::eHostVisible |
-                       vk::MemoryPropertyFlagBits::eHostCoherent);
-
-  void *dataStaging = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(dataStaging, vertices.data(), bufferSize);
-  stagingBufferMemory.unmapMemory();
-
-  std::tie(vertexBuffer, vertexBufferMemory) =
-      createBuffer(bufferSize,
-                   vk::BufferUsageFlagBits::eVertexBuffer |
-                       vk::BufferUsageFlagBits::eTransferDst,
-                   vk::MemoryPropertyFlagBits::eDeviceLocal);
-
-  copyBuffer(stagingBuffer, vertexBuffer, bufferSize);
-}
-
-void vulkan_app::TriangleApp::createIndexBuffer() {
-  vk::DeviceSize bufferSize = sizeof(indices[0]) * indices.size();
+  vk::DeviceSize bufferSize = sizeof(vertices_[0]) * vertices_.size();
 
   auto [stagingBuffer, stagingBufferMemory] =
       createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
@@ -372,26 +369,147 @@ void vulkan_app::TriangleApp::createIndexBuffer() {
                        vk::MemoryPropertyFlagBits::eHostCoherent);
 
   void *data = stagingBufferMemory.mapMemory(0, bufferSize);
-  memcpy(data, indices.data(), (size_t)bufferSize);
+  memcpy(data, vertices_.data(), (size_t)bufferSize);
   stagingBufferMemory.unmapMemory();
 
-  std::tie(indexBuffer, indexBufferMemory) =
+  std::tie(vertexBuffer_, vertexBufferMemory_) =
+      createBuffer(bufferSize,
+                   vk::BufferUsageFlagBits::eVertexBuffer |
+                       vk::BufferUsageFlagBits::eTransferDst,
+                   vk::MemoryPropertyFlagBits::eDeviceLocal);
+
+  copyBuffer(stagingBuffer, vertexBuffer_, bufferSize);
+}
+
+void vulkan_app::TriangleApp::createIndexBuffer() {
+  vk::DeviceSize bufferSize = sizeof(indices_[0]) * indices_.size();
+
+  auto [stagingBuffer, stagingBufferMemory] =
+      createBuffer(bufferSize, vk::BufferUsageFlagBits::eTransferSrc,
+                   vk::MemoryPropertyFlagBits::eHostVisible |
+                       vk::MemoryPropertyFlagBits::eHostCoherent);
+
+  void *data = stagingBufferMemory.mapMemory(0, bufferSize);
+  memcpy(data, indices_.data(), (size_t)bufferSize);
+  stagingBufferMemory.unmapMemory();
+
+  std::tie(indexBuffer_, indexBufferMemory_) =
       createBuffer(bufferSize,
                    vk::BufferUsageFlagBits::eIndexBuffer |
                        vk::BufferUsageFlagBits::eTransferDst,
                    vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-  copyBuffer(stagingBuffer, indexBuffer, bufferSize);
+  copyBuffer(stagingBuffer, indexBuffer_, bufferSize);
+}
+
+void vulkan_app::TriangleApp::createSyncObjects() {
+  inFlightFences_.clear();
+
+  vk::SemaphoreTypeCreateInfo semaphoreType{
+      .semaphoreType = vk::SemaphoreType::eTimeline, .initialValue = 0};
+  semaphore_ = vk::raii::Semaphore(device_, {.pNext = &semaphoreType});
+  timelineValue_ = 0;
+
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+    vk::FenceCreateInfo fenceInfo{};
+    inFlightFences_.emplace_back(device_, fenceInfo);
+  }
+}
+
+void vulkan_app::TriangleApp::drawFrame() {
+  auto [result, imageIndex] = swapChain_.acquireNextImage(
+      UINT64_MAX, nullptr, *inFlightFences_[frameIndex_]);
+  auto fenceResult = device_.waitForFences(*inFlightFences_[frameIndex_],
+                                           vk::True, UINT64_MAX);
+  if (fenceResult != vk::Result::eSuccess) {
+    throw std::runtime_error("failed to wait for fence");
+  }
+  device_.resetFences(*inFlightFences_[frameIndex_]);
+
+  uint64_t waitValue = timelineValue_;
+  uint64_t signalValue = ++timelineValue_;
+
+  {
+    recordCommandBuffer(imageIndex);
+
+    vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eVertexInput;
+    vk::TimelineSemaphoreSubmitInfo timelineInfo{
+        .waitSemaphoreValueCount = 1,
+        .pWaitSemaphoreValues = &waitValue,
+        .signalSemaphoreValueCount = 1,
+        .pSignalSemaphoreValues = &signalValue};
+
+    vk::SubmitInfo submitInfo{.pNext = &timelineInfo,
+                              .waitSemaphoreCount = 1,
+                              .pWaitSemaphores = &*semaphore_,
+                              .pWaitDstStageMask = &waitStage,
+                              .commandBufferCount = 1,
+                              .pCommandBuffers = &*commandBuffers_[frameIndex_],
+                              .signalSemaphoreCount = 1,
+                              .pSignalSemaphores = &*semaphore_};
+
+    queue_.submit(submitInfo, nullptr);
+
+    vk::SemaphoreWaitInfo waitInfo{.semaphoreCount = 1,
+                                   .pSemaphores = &*semaphore_,
+                                   .pValues = &signalValue};
+
+    auto result = device_.waitSemaphores(waitInfo, UINT64_MAX);
+    if (result != vk::Result::eSuccess) {
+      throw std::runtime_error("failed to wait for semaphore");
+    }
+
+    vk::PresentInfoKHR presentInfo{.waitSemaphoreCount = 0,
+                                   .pWaitSemaphores = nullptr,
+                                   .swapchainCount = 1,
+                                   .pSwapchains = &*swapChain_,
+                                   .pImageIndices = &imageIndex};
+
+    result = queue_.presentKHR(presentInfo);
+    if ((result == vk::Result::eSuboptimalKHR) ||
+        (result == vk::Result::eErrorOutOfDateKHR) || framebufferResized_) {
+      framebufferResized_ = false;
+      recreateSwapChain();
+    }
+  }
+
+  frameIndex_ = (frameIndex_ + 1) % MAX_FRAMES_IN_FLIGHT;
+}
+
+void vulkan_app::TriangleApp::framebufferResizeCallback(GLFWwindow *window,
+                                                        int width, int height) {
+  auto app = reinterpret_cast<TriangleApp *>(glfwGetWindowUserPointer(window));
+  app->framebufferResized_ = true;
+}
+
+void vulkan_app::TriangleApp::cleanupSwapChain() {
+  swapChainImageViews_.clear();
+  swapChain_ = nullptr;
+}
+
+void vulkan_app::TriangleApp::recreateSwapChain() {
+  int width = 0, height = 0;
+  glfwGetFramebufferSize(window_, &width, &height);
+  while (width == 0 || height == 0) {
+    glfwGetFramebufferSize(window_, &width, &height);
+    glfwWaitEvents();
+  }
+
+  device_.waitIdle();
+
+  cleanupSwapChain();
+  createSwapChain();
+  createImageViews();
 }
 
 std::vector<const char *>
-vulkan_app::TriangleApp::getRequiredInstanceExtensions() {
+vulkan_app::TriangleApp::getRequiredInstanceExtensions() const {
   uint32_t glfwExtensionCount = 0;
   auto glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
   std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
 
   std::vector<vk::ExtensionProperties> props =
-      context.enumerateInstanceExtensionProperties();
+      context_.enumerateInstanceExtensionProperties();
   bool debugUtilsAvailable =
       std::ranges::any_of(props, [](const vk::ExtensionProperties &ep) {
         return std::strcmp(ep.extensionName, vk::EXTDebugUtilsExtensionName) ==
@@ -415,7 +533,7 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkan_app::TriangleApp::debugCallback(
     const vk::DebugUtilsMessengerCallbackDataEXT *pCallbackData, void *) {
   if (severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eError ||
       severity == vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning) {
-    std::cerr << "validation layer: type " << to_string(type)
+    std::cerr << "validation layer: type " << vk::to_string(type)
               << " msg: " << pCallbackData->pMessage << std::endl;
   }
 
@@ -424,7 +542,7 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkan_app::TriangleApp::debugCallback(
 
 bool vulkan_app::TriangleApp::isDeviceSuitable(
     const vk::raii::PhysicalDevice &physicalDevice) const {
-  bool supportsVulkan1_3 =
+  bool supportsVulkan13 =
       physicalDevice.getProperties().apiVersion >= VK_API_VERSION_1_3;
 
   auto queueFamilies = physicalDevice.getQueueFamilyProperties();
@@ -436,7 +554,7 @@ bool vulkan_app::TriangleApp::isDeviceSuitable(
   auto availableDeviceExtensions =
       physicalDevice.enumerateDeviceExtensionProperties();
   bool supportsAllRequiredExtensions = std::ranges::all_of(
-      requiredDeviceExtension,
+      requiredDeviceExtension_,
       [&availableDeviceExtensions](const auto &requiredDeviceExtension) {
         return std::ranges::any_of(
             availableDeviceExtensions,
@@ -446,7 +564,7 @@ bool vulkan_app::TriangleApp::isDeviceSuitable(
             });
       });
 
-  return supportsVulkan1_3 && supportsGraphics && supportsAllRequiredExtensions;
+  return supportsVulkan13 && supportsGraphics && supportsAllRequiredExtensions;
 }
 
 vk::Extent2D vulkan_app::TriangleApp::chooseSwapExtent(
@@ -456,7 +574,7 @@ vk::Extent2D vulkan_app::TriangleApp::chooseSwapExtent(
     return capabilities.currentExtent;
   }
   int width = 0, height = 0;
-  glfwGetFramebufferSize(window, &width, &height);
+  glfwGetFramebufferSize(window_, &width, &height);
 
   return {std::clamp<uint32_t>(width, capabilities.minImageExtent.width,
                                capabilities.maxImageExtent.width),
@@ -496,12 +614,12 @@ vk::PresentModeKHR vulkan_app::TriangleApp::chooseSwapPresentMode(
              : vk::PresentModeKHR::eFifo;
 }
 
-vk::raii::ShaderModule
-vulkan_app::TriangleApp::createShaderModule(const std::vector<char> &code) {
+vk::raii::ShaderModule vulkan_app::TriangleApp::createShaderModule(
+    const std::vector<char> &code) const {
   vk::ShaderModuleCreateInfo createInfo{
       .codeSize = code.size(),
       .pCode = reinterpret_cast<const uint32_t *>(code.data())};
-  vk::raii::ShaderModule shaderModule{device, createInfo};
+  vk::raii::ShaderModule shaderModule{device_, createInfo};
 
   return shaderModule;
 }
@@ -522,19 +640,19 @@ vulkan_app::TriangleApp::readFile(const std::string &filename) {
 }
 
 std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>
-vulkan_app::TriangleApp::createBuffer(vk::DeviceSize size,
-                                      vk::BufferUsageFlags usage,
-                                      vk::MemoryPropertyFlags properties) {
+vulkan_app::TriangleApp::createBuffer(
+    vk::DeviceSize size, vk::BufferUsageFlags usage,
+    vk::MemoryPropertyFlags properties) const {
   vk::BufferCreateInfo bufferInfo{
       .size = size, .usage = usage, .sharingMode = vk::SharingMode::eExclusive};
-  vk::raii::Buffer buffer = vk::raii::Buffer(device, bufferInfo);
+  vk::raii::Buffer buffer = vk::raii::Buffer(device_, bufferInfo);
   vk::MemoryRequirements memRequirements = buffer.getMemoryRequirements();
   vk::MemoryAllocateInfo allocInfo{
       .allocationSize = memRequirements.size,
       .memoryTypeIndex =
           findMemoryType(memRequirements.memoryTypeBits, properties)};
   vk::raii::DeviceMemory bufferMemory =
-      vk::raii::DeviceMemory(device, allocInfo);
+      vk::raii::DeviceMemory(device_, allocInfo);
   buffer.bindMemory(*bufferMemory, 0);
 
   return {std::move(buffer), std::move(bufferMemory)};
@@ -543,12 +661,12 @@ vulkan_app::TriangleApp::createBuffer(vk::DeviceSize size,
 void vulkan_app::TriangleApp::copyBuffer(vk::raii::Buffer &srcBuffer,
                                          vk::raii::Buffer &dstBuffer,
                                          vk::DeviceSize size) {
-  vk::CommandBufferAllocateInfo allocInfo{.commandPool = *commandPool,
+  vk::CommandBufferAllocateInfo allocInfo{.commandPool = *commandPool_,
                                           .level =
                                               vk::CommandBufferLevel::ePrimary,
                                           .commandBufferCount = 1};
   vk::raii::CommandBuffer commandCopyBuffer =
-      std::move(device.allocateCommandBuffers(allocInfo).front());
+      std::move(device_.allocateCommandBuffers(allocInfo).front());
 
   commandCopyBuffer.begin(
       {.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
@@ -556,17 +674,16 @@ void vulkan_app::TriangleApp::copyBuffer(vk::raii::Buffer &srcBuffer,
                                vk::BufferCopy(0, 0, size));
   commandCopyBuffer.end();
 
-  queue.submit(vk::SubmitInfo{.commandBufferCount = 1,
-                              .pCommandBuffers = &*commandCopyBuffer},
-               nullptr);
-  queue.waitIdle();
+  queue_.submit(vk::SubmitInfo{.commandBufferCount = 1,
+                               .pCommandBuffers = &*commandCopyBuffer},
+                nullptr);
+  queue_.waitIdle();
 }
 
-uint32_t
-vulkan_app::TriangleApp::findMemoryType(uint32_t typeFilter,
-                                        vk::MemoryPropertyFlags properties) {
+uint32_t vulkan_app::TriangleApp::findMemoryType(
+    uint32_t typeFilter, vk::MemoryPropertyFlags properties) const {
   vk::PhysicalDeviceMemoryProperties memProperties =
-      physicalDevice.getMemoryProperties();
+      physicalDevice_.getMemoryProperties();
 
   for (uint32_t i = 0; i < memProperties.memoryTypeCount; ++i) {
     if ((typeFilter & (1 << i)) && (memProperties.memoryTypes[i].propertyFlags &
@@ -576,4 +693,75 @@ vulkan_app::TriangleApp::findMemoryType(uint32_t typeFilter,
   }
 
   throw std::runtime_error("failed to find suitable memory type");
+}
+
+void vulkan_app::TriangleApp::recordCommandBuffer(uint32_t imageIndex) {
+  auto &commandBuffer = commandBuffers_[frameIndex_];
+  commandBuffer.begin({});
+
+  transitionImageLayout(imageIndex, vk::ImageLayout::eUndefined,
+                        vk::ImageLayout::eColorAttachmentOptimal, {},
+                        vk::AccessFlagBits2::eColorAttachmentWrite,
+                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                        vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+
+  vk::ClearValue clearColor = vk::ClearColorValue(0.0f, 0.0f, 0.0f, 1.0f);
+  vk::RenderingAttachmentInfo attachmentInfo = {
+      .imageView = swapChainImageViews_[imageIndex],
+      .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+      .loadOp = vk::AttachmentLoadOp::eClear,
+      .storeOp = vk::AttachmentStoreOp::eStore,
+      .clearValue = clearColor};
+  vk::RenderingInfo renderingInfo = {
+      .renderArea = {.offset = {0, 0}, .extent = swapChainExtent_},
+      .layerCount = 1,
+      .colorAttachmentCount = 1,
+      .pColorAttachments = &attachmentInfo};
+
+  commandBuffer.beginRendering(renderingInfo);
+  commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics,
+                             *graphicsPipeline_);
+  commandBuffer.setViewport(
+      0, vk::Viewport(0.0f, 0.0f, static_cast<float>(swapChainExtent_.width),
+                      static_cast<float>(swapChainExtent_.height), 0.0f, 1.0f));
+  commandBuffer.setScissor(0, vk::Rect2D(vk::Offset2D(0, 0), swapChainExtent_));
+  commandBuffer.bindVertexBuffers(0, *vertexBuffer_, {0});
+  commandBuffer.bindIndexBuffer(
+      *indexBuffer_, 0,
+      vk::IndexTypeValue<decltype(indices_)::value_type>::value);
+  commandBuffer.drawIndexed(static_cast<uint32_t>(indices_.size()), 1, 0, 0, 0);
+  commandBuffer.endRendering();
+
+  transitionImageLayout(imageIndex, vk::ImageLayout::eColorAttachmentOptimal,
+                        vk::ImageLayout::ePresentSrcKHR,
+                        vk::AccessFlagBits2::eColorAttachmentWrite, {},
+                        vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+                        vk::PipelineStageFlagBits2::eBottomOfPipe);
+  commandBuffer.end();
+}
+
+void vulkan_app::TriangleApp::transitionImageLayout(
+    uint32_t imageIndex, vk::ImageLayout oldLayout, vk::ImageLayout newLayout,
+    vk::AccessFlags2 srcAccessMask, vk::AccessFlags2 dstAccessMask,
+    vk::PipelineStageFlags2 srcStageMask,
+    vk::PipelineStageFlags2 dstStageMask) {
+  vk::ImageMemoryBarrier2 barrier = {
+      .srcStageMask = srcStageMask,
+      .srcAccessMask = srcAccessMask,
+      .dstStageMask = dstStageMask,
+      .dstAccessMask = dstAccessMask,
+      .oldLayout = oldLayout,
+      .newLayout = newLayout,
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .image = swapChainImages_[imageIndex],
+      .subresourceRange = {.aspectMask = vk::ImageAspectFlagBits::eColor,
+                           .baseMipLevel = 0,
+                           .levelCount = 1,
+                           .baseArrayLayer = 0,
+                           .layerCount = 1}};
+  vk::DependencyInfo dependencyInfo = {.dependencyFlags = {},
+                                       .imageMemoryBarrierCount = 1,
+                                       .pImageMemoryBarriers = &barrier};
+  commandBuffers_[frameIndex_].pipelineBarrier2(dependencyInfo);
 }
