@@ -33,6 +33,17 @@ private:
   const uint32_t WINDOW_WIDTH = 800;
   const uint32_t WINDOW_HEIGHT = 600;
 
+  AppInfo appInfo = {};
+
+  const std::vector<const char *> requiredDeviceExtension = {
+      VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+
+  const std::vector<Vertex> vertices = {{{-0.5f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+                                        {{0.5f, -0.5f}, {0.0f, 1.0f, 0.0f}},
+                                        {{0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}};
+
+  const std::vector<uint16_t> indices = {0, 1, 2};
+
   GLFWwindow *window = nullptr;
   vk::raii::Context context;
   vk::raii::Instance instance = nullptr;
@@ -55,10 +66,10 @@ private:
   vk::raii::CommandPool commandPool = nullptr;
   std::vector<vk::raii::CommandBuffer> commandBuffers;
 
-  AppInfo appInfo = {};
-
-  const std::vector<const char *> requiredDeviceExtension = {
-      VK_KHR_SWAPCHAIN_EXTENSION_NAME};
+  vk::raii::Buffer vertexBuffer = nullptr;
+  vk::raii::DeviceMemory vertexBufferMemory = nullptr;
+  vk::raii::Buffer indexBuffer = nullptr;
+  vk::raii::DeviceMemory indexBufferMemory = nullptr;
 
   void initWindow();
   void initVulkan();
@@ -83,8 +94,6 @@ private:
   void createVertexBuffer();
   void createIndexBuffer();
 
-  void createSyncObjects();
-
   std::vector<const char *> getRequiredInstanceExtensions();
   static VKAPI_ATTR vk::Bool32 VKAPI_CALL debugCallback(
       vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
@@ -104,6 +113,14 @@ private:
   vk::raii::ShaderModule createShaderModule(const std::vector<char> &code);
 
   static std::vector<char> readFile(const std::string &filename);
+
+  std::pair<vk::raii::Buffer, vk::raii::DeviceMemory>
+  createBuffer(vk::DeviceSize size, vk::BufferUsageFlags usage,
+               vk::MemoryPropertyFlags properties);
+  void copyBuffer(vk::raii::Buffer &srcBuffer, vk::raii::Buffer &dstBuffer,
+                  vk::DeviceSize size);
+  uint32_t findMemoryType(uint32_t typeFilter,
+                          vk::MemoryPropertyFlags properties);
 };
 } // namespace vulkan_app
 
