@@ -3,6 +3,24 @@
 #include <fstream>
 #include <iostream>
 
+vk::VertexInputBindingDescription vulkan_app::Vertex::getBindingDescription() {
+  return {.binding = 0,
+          .stride = sizeof(Vertex),
+          .inputRate = vk::VertexInputRate::eVertex};
+}
+
+std::array<vk::VertexInputAttributeDescription, 2>
+vulkan_app::Vertex::getAttributeDescriptions() {
+  return {{{.location = 0,
+            .binding = 0,
+            .format = vk::Format::eR32G32Sfloat,
+            .offset = offsetof(Vertex, pos)},
+           {.location = 1,
+            .binding = 0,
+            .format = vk::Format::eR32G32B32Sfloat,
+            .offset = offsetof(Vertex, color)}}};
+}
+
 void vulkan_app::TriangleApp::run() {
   initWindow();
   initVulkan();
@@ -306,6 +324,22 @@ void vulkan_app::TriangleApp::createGraphicsPipeline() {
   graphicsPipeline = vk::raii::Pipeline(
       device, nullptr,
       pipelineCreateInfoChain.get<vk::GraphicsPipelineCreateInfo>());
+}
+
+void vulkan_app::TriangleApp::createCommandPool() {
+  vk::CommandPoolCreateInfo poolInfo{
+      .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+      .queueFamilyIndex = queueIndex};
+  commandPool = vk::raii::CommandPool(device, poolInfo);
+}
+
+void vulkan_app::TriangleApp::createCommandBuffers() {
+  commandBuffers.clear();
+  vk::CommandBufferAllocateInfo allocInfo{.commandPool = *commandPool,
+                                          .level =
+                                              vk::CommandBufferLevel::ePrimary,
+                                          .commandBufferCount = 1};
+  commandBuffers = vk::raii::CommandBuffers(device, allocInfo);
 }
 
 std::vector<const char *>
