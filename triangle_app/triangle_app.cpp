@@ -384,8 +384,11 @@ void vulkan_app::TriangleApp::createSyncObjects() {
   renderFinishedSemaphores_.clear();
   inFlightFences_.clear();
 
-  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+  for (size_t i = 0; i < swapChainImages_.size(); ++i) {
     renderFinishedSemaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+  }
+
+  for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
     presentCompleteSemaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
     inFlightFences_.emplace_back(
         device_,
@@ -425,12 +428,12 @@ void vulkan_app::TriangleApp::drawFrame() {
         .commandBufferCount = 1,
         .pCommandBuffers = &*commandBuffers_[frameIndex_],
         .signalSemaphoreCount = 1,
-        .pSignalSemaphores = &*renderFinishedSemaphores_[frameIndex_]};
+        .pSignalSemaphores = &*renderFinishedSemaphores_[imageIndex]};
     queue_.submit(submitInfo, *inFlightFences_[frameIndex_]);
 
     const vk::PresentInfoKHR presentInfoKHR{
         .waitSemaphoreCount = 1,
-        .pWaitSemaphores = &*renderFinishedSemaphores_[frameIndex_],
+        .pWaitSemaphores = &*renderFinishedSemaphores_[imageIndex],
         .swapchainCount = 1,
         .pSwapchains = &*swapChain_,
         .pImageIndices = &imageIndex};
