@@ -45,7 +45,6 @@ void vulkan_app::TriangleApp::initVulkan() {
   setupDebugMessenger();
   createSurface();
   pickPhysicalDevice();
-  checkFeatureSupport();
   createLogicalDevice();
 
   createSwapChain();
@@ -149,22 +148,6 @@ void vulkan_app::TriangleApp::pickPhysicalDevice() {
             << VK_VERSION_PATCH(deviceProperties.apiVersion) << std::endl;
 }
 
-void vulkan_app::TriangleApp::checkFeatureSupport() {
-  appInfo_.profile = {VP_KHR_ROADMAP_2022_NAME,
-                      VP_KHR_ROADMAP_2022_SPEC_VERSION};
-
-  VkBool32 supported = vk::False;
-  VkResult result = vpGetPhysicalDeviceProfileSupport(
-      *instance_, *physicalDevice_, &appInfo_.profile, &supported);
-
-  if (!(result == VK_SUCCESS) || !(supported == vk::True)) {
-    appInfo_.profileSupported = false;
-  }
-
-  appInfo_.profileSupported = true;
-  std::cout << "Using KHR roadmap 2022 profile" << std::endl;
-}
-
 void vulkan_app::TriangleApp::createLogicalDevice() {
   std::vector<vk::QueueFamilyProperties> queueFamilyProperties =
       physicalDevice_.getQueueFamilyProperties();
@@ -179,9 +162,16 @@ void vulkan_app::TriangleApp::createLogicalDevice() {
     }
   }
   if (queueIndex_ == ~0) {
-    throw std::runtime_error(
-        "could not find a queue for graphics and present -> terminating");
+    throw std::runtime_error("could not find a queue for graphics and present");
   }
+
+  vk::StructureChain<vk::PhysicalDeviceFeatures2,
+                     vk::PhysicalDeviceVulkan13Features,
+                     vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>
+      featureChain = {
+          {},
+          {.synchronization2 = VK_TRUE, .dynamicRendering = VK_TRUE},
+          {.extendedDynamicState = VK_TRUE}};
 
   float queuePriority = 0.5f;
   vk::DeviceQueueCreateInfo deviceQueueCreateInfo{
@@ -189,26 +179,13 @@ void vulkan_app::TriangleApp::createLogicalDevice() {
       .queueCount = 1,
       .pQueuePriorities = &queuePriority};
 
-  if (!appInfo_.profileSupported) {
-    throw std::runtime_error(
-        "KHR roadmap 2022 profile is not supported -> terminating");
-  }
-
-  vk::PhysicalDeviceFeatures2 features2;
-  vk::PhysicalDeviceFeatures deviceFeatures{};
-  features2.features = deviceFeatures;
-
-  vk::PhysicalDeviceDynamicRenderingFeatures dynamicRenderingFeatures;
-  dynamicRenderingFeatures.dynamicRendering = vk::True;
-  features2.pNext = &dynamicRenderingFeatures;
-
   vk::DeviceCreateInfo vkDeviceCreateInfo{
-      .pNext = &features2,
+      .pNext = &featureChain.get<vk::PhysicalDeviceVulkan13Features>(),
       .queueCreateInfoCount = 1,
       .pQueueCreateInfos = &deviceQueueCreateInfo,
       .enabledExtensionCount =
-          static_cast<uint32_t>(requiredDeviceExtension_.size()),
-      .ppEnabledExtensionNames = requiredDeviceExtension_.data()};
+          static_cast<uint32_t>(requiredDeviceExtensions_.size()),
+      .ppEnabledExtensionNames = requiredDeviceExtensions_.data()};
 
   device_ = vk::raii::Device(physicalDevice_, vkDeviceCreateInfo);
   queue_ = device_.getQueue(queueIndex_, 0);
@@ -240,7 +217,7 @@ void vulkan_app::TriangleApp::createSwapChain() {
       .preTransform = surfaceCapabilities.currentTransform,
       .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
       .presentMode = presentMode,
-      .clipped = vk::True};
+      .clipped = VK_TRUE};
 
   swapChain_ = vk::raii::SwapchainKHR(device_, swapChainCreateInfo);
   swapChainImages_ = swapChain_.getImages();
@@ -288,26 +265,26 @@ void vulkan_app::TriangleApp::createGraphicsPipeline() {
                                                     .scissorCount = 1};
 
   vk::PipelineRasterizationStateCreateInfo rasterizer{
-      .depthClampEnable = vk::False,
-      .rasterizerDiscardEnable = vk::False,
+      .depthClampEnable = VK_FALSE,
+      .rasterizerDiscardEnable = VK_FALSE,
       .polygonMode = vk::PolygonMode::eFill,
       .cullMode = vk::CullModeFlagBits::eBack,
       .frontFace = vk::FrontFace::eClockwise,
-      .depthBiasEnable = vk::False,
+      .depthBiasEnable = VK_FALSE,
       .lineWidth = 1.0f};
 
   vk::PipelineMultisampleStateCreateInfo multisampling{
       .rasterizationSamples = vk::SampleCountFlagBits::e1,
-      .sampleShadingEnable = vk::False};
+      .sampleShadingEnable = VK_FALSE};
 
   vk::PipelineColorBlendAttachmentState colorBlendAttachment{
-      .blendEnable = vk::False,
+      .blendEnable = VK_FALSE,
       .colorWriteMask =
           vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA};
 
   vk::PipelineColorBlendStateCreateInfo colorBlending{
-      .logicOpEnable = vk::False,
+      .logicOpEnable = VK_FALSE,
       .logicOp = vk::LogicOp::eCopy,
       .attachmentCount = 1,
       .pAttachments = &colorBlendAttachment};
@@ -403,69 +380,61 @@ void vulkan_app::TriangleApp::createIndexBuffer() {
 }
 
 void vulkan_app::TriangleApp::createSyncObjects() {
+  presentCompleteSemaphores_.clear();
+  renderFinishedSemaphores_.clear();
   inFlightFences_.clear();
 
-  vk::SemaphoreTypeCreateInfo semaphoreType{
-      .semaphoreType = vk::SemaphoreType::eTimeline, .initialValue = 0};
-  semaphore_ = vk::raii::Semaphore(device_, {.pNext = &semaphoreType});
-  timelineValue_ = 0;
-
   for (size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
-    vk::FenceCreateInfo fenceInfo{};
-    inFlightFences_.emplace_back(device_, fenceInfo);
+    renderFinishedSemaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+    presentCompleteSemaphores_.emplace_back(device_, vk::SemaphoreCreateInfo());
+    inFlightFences_.emplace_back(
+        device_,
+        vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
   }
 }
 
 void vulkan_app::TriangleApp::drawFrame() {
-  auto [result, imageIndex] = swapChain_.acquireNextImage(
-      UINT64_MAX, nullptr, *inFlightFences_[frameIndex_]);
-  auto fenceResult = device_.waitForFences(*inFlightFences_[frameIndex_],
-                                           vk::True, UINT64_MAX);
+  vk::Result fenceResult =
+      device_.waitForFences(*inFlightFences_[frameIndex_], VK_TRUE, UINT64_MAX);
   if (fenceResult != vk::Result::eSuccess) {
     throw std::runtime_error("failed to wait for fence");
   }
+
+  auto [result, imageIndex] = swapChain_.acquireNextImage(
+      UINT64_MAX, *presentCompleteSemaphores_[frameIndex_], nullptr);
+  if (result == vk::Result::eErrorOutOfDateKHR) {
+    recreateSwapChain();
+    return;
+  }
+  if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR) {
+    throw std::runtime_error("failed to acquire swap chain image");
+  }
+
   device_.resetFences(*inFlightFences_[frameIndex_]);
 
-  uint64_t waitValue = timelineValue_;
-  uint64_t signalValue = ++timelineValue_;
-
   {
+    commandBuffers_[frameIndex_].reset();
     recordCommandBuffer(imageIndex);
 
-    vk::PipelineStageFlags waitStage = vk::PipelineStageFlagBits::eVertexInput;
-    vk::TimelineSemaphoreSubmitInfo timelineInfo{
-        .waitSemaphoreValueCount = 1,
-        .pWaitSemaphoreValues = &waitValue,
-        .signalSemaphoreValueCount = 1,
-        .pSignalSemaphoreValues = &signalValue};
+    vk::PipelineStageFlags waitDestinationStageMask(
+        vk::PipelineStageFlagBits::eColorAttachmentOutput);
+    const vk::SubmitInfo submitInfo{
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &*presentCompleteSemaphores_[frameIndex_],
+        .pWaitDstStageMask = &waitDestinationStageMask,
+        .commandBufferCount = 1,
+        .pCommandBuffers = &*commandBuffers_[frameIndex_],
+        .signalSemaphoreCount = 1,
+        .pSignalSemaphores = &*renderFinishedSemaphores_[frameIndex_]};
+    queue_.submit(submitInfo, *inFlightFences_[frameIndex_]);
 
-    vk::SubmitInfo submitInfo{.pNext = &timelineInfo,
-                              .waitSemaphoreCount = 1,
-                              .pWaitSemaphores = &*semaphore_,
-                              .pWaitDstStageMask = &waitStage,
-                              .commandBufferCount = 1,
-                              .pCommandBuffers = &*commandBuffers_[frameIndex_],
-                              .signalSemaphoreCount = 1,
-                              .pSignalSemaphores = &*semaphore_};
-
-    queue_.submit(submitInfo, nullptr);
-
-    vk::SemaphoreWaitInfo waitInfo{.semaphoreCount = 1,
-                                   .pSemaphores = &*semaphore_,
-                                   .pValues = &signalValue};
-
-    auto result = device_.waitSemaphores(waitInfo, UINT64_MAX);
-    if (result != vk::Result::eSuccess) {
-      throw std::runtime_error("failed to wait for semaphore");
-    }
-
-    vk::PresentInfoKHR presentInfo{.waitSemaphoreCount = 0,
-                                   .pWaitSemaphores = nullptr,
-                                   .swapchainCount = 1,
-                                   .pSwapchains = &*swapChain_,
-                                   .pImageIndices = &imageIndex};
-
-    result = queue_.presentKHR(presentInfo);
+    const vk::PresentInfoKHR presentInfoKHR{
+        .waitSemaphoreCount = 1,
+        .pWaitSemaphores = &*renderFinishedSemaphores_[frameIndex_],
+        .swapchainCount = 1,
+        .pSwapchains = &*swapChain_,
+        .pImageIndices = &imageIndex};
+    result = queue_.presentKHR(presentInfoKHR);
     if ((result == vk::Result::eSuboptimalKHR) ||
         (result == vk::Result::eErrorOutOfDateKHR) || framebufferResized_) {
       framebufferResized_ = false;
@@ -537,7 +506,7 @@ VKAPI_ATTR vk::Bool32 VKAPI_CALL vulkan_app::TriangleApp::debugCallback(
               << " msg: " << pCallbackData->pMessage << std::endl;
   }
 
-  return vk::False;
+  return VK_FALSE;
 }
 
 bool vulkan_app::TriangleApp::isDeviceSuitable(
@@ -554,7 +523,7 @@ bool vulkan_app::TriangleApp::isDeviceSuitable(
   auto availableDeviceExtensions =
       physicalDevice.enumerateDeviceExtensionProperties();
   bool supportsAllRequiredExtensions = std::ranges::all_of(
-      requiredDeviceExtension_,
+      requiredDeviceExtensions_,
       [&availableDeviceExtensions](const auto &requiredDeviceExtension) {
         return std::ranges::any_of(
             availableDeviceExtensions,

@@ -4,18 +4,12 @@
 #ifndef VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #define VULKAN_HPP_NO_STRUCT_CONSTRUCTORS
 #endif
-#include <vulkan/vulkan_profiles.hpp>
 #include <vulkan/vulkan_raii.hpp>
 
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
 
 namespace vulkan_app {
-struct AppInfo {
-  bool profileSupported = false;
-  VpProfileProperties profile;
-};
-
 struct Vertex {
   glm::vec2 pos;
   glm::vec3 color;
@@ -34,9 +28,7 @@ private:
   const uint32_t WINDOW_HEIGHT = 600;
   const int MAX_FRAMES_IN_FLIGHT = 2;
 
-  AppInfo appInfo_ = {};
-
-  const std::vector<const char *> requiredDeviceExtension_ = {
+  const std::vector<const char *> requiredDeviceExtensions_ = {
       VK_KHR_SWAPCHAIN_EXTENSION_NAME};
 
   const std::vector<Vertex> vertices_ = {{{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
@@ -71,8 +63,8 @@ private:
   vk::raii::Buffer indexBuffer_ = nullptr;
   vk::raii::DeviceMemory indexBufferMemory_ = nullptr;
 
-  vk::raii::Semaphore semaphore_ = nullptr;
-  uint64_t timelineValue_ = 0;
+  std::vector<vk::raii::Semaphore> presentCompleteSemaphores_;
+  std::vector<vk::raii::Semaphore> renderFinishedSemaphores_;
   std::vector<vk::raii::Fence> inFlightFences_;
   uint32_t frameIndex_ = 0;
 
@@ -87,7 +79,6 @@ private:
   void setupDebugMessenger();
   void createSurface();
   void pickPhysicalDevice();
-  void checkFeatureSupport();
   void createLogicalDevice();
 
   void createSwapChain();
